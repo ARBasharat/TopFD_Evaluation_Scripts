@@ -206,7 +206,8 @@ def filter_features_tools(topfd_features_replicate, promex_features_replicate, f
     f = flashdeconv_features_replicate[i]
     x = xtract_features_replicate[i]
     print("Before - Rep", i, "lengths are", len(t), len(p), len(f),len(x))
-    selected_length = len(p)
+    length = sorted([len(t), len(p), len(f),len(x)])
+    selected_length = length[0]
     topfd_features_replicate[i] = topfd_features_replicate[i][0:selected_length]
     promex_features_replicate[i] = promex_features_replicate[i][0:selected_length]
     flashdeconv_features_replicate[i] = flashdeconv_features_replicate[i][0:selected_length]

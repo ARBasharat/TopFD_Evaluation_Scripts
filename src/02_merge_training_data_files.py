@@ -2,9 +2,6 @@
 
 import os 
 import argparse  
-from copy import deepcopy
-from collections import Counter
-from matplotlib import pyplot as plt
 from read_model_features import get_features
 
 def output_env_coll_list(output_fname, shortlist_features):
@@ -87,4 +84,4 @@ if __name__ == "__main__":
   for idx in range(0, len(features)):
     features[idx].FeatureID = idx
     
-  output_env_coll_list(os.path.join(os.path.dirname(args.feature_dir), "00_train_data.csv"), features)
+  output_env_coll_list(os.path.join(os.path.dirname(args.feature_dir), "00_train_data_x.csv"), features)

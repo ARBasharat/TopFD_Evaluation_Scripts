@@ -244,21 +244,10 @@ def write_Combined_feature_detailed_10(common_features_all, featureList_all, fil
       file.write("FEATURE_END \n\n")
   file.close()
 
-def plot_distribution_combined(common_features, Label = False):
+def print_distribution_combined(common_features):
   labels = [len(i) for i in common_features]
   labels_counter_1 = sorted(Counter(labels).items(), reverse = True)
   print("Label Counter", labels_counter_1)
-  width = 0.5
-  plt.figure()
-  plt.bar(Counter(labels).keys(), Counter(labels).values(), width)
-  labels_counter = Counter(labels)
-  for i in range(1, len(Counter(labels).keys()) + 1):
-    plt.text(x=i, y=labels_counter[i]+50, s=str(labels_counter[i]), rotation='75', fontdict=dict(color='blue', size=10))
-  plt.title("Labels")
-  plt.xlabel("Feature found in # of replicates")
-  plt.show()
-  plt.savefig("distribution.png", dpi=500)
-  plt.close()
 
 ###############
 def return_list(multicharge_features_replicate):
@@ -473,7 +462,7 @@ if __name__ == "__main__":
   ######## GET AUC
   features = return_list(multicharge_features_replicate)
   common_features_r1 = get_common_features_first_replicate(features, args.tolerance, args.timeTolerance, 0)
-  plot_distribution_combined(common_features_r1, True)
+  print_distribution_combined(common_features_r1)
   label_features(common_features_r1, features, 0)
   
   generate_combine_roc_plots(features, 0, replicate_count_tolerance)
