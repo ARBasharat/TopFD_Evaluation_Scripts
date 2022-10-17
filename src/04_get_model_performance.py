@@ -2,11 +2,16 @@
 
 import os 
 import argparse  
+import tensorflow as tf
+import numpy as np
+from math import log
 from copy import deepcopy
 from collections import Counter
 from matplotlib import pyplot as plt
+from sklearn.metrics import roc_curve, roc_auc_score
+from statistics import mean
 from read_model_features import get_features
-
+  
 def output_env_coll_list(output_fname, shortlist_features):
   txt_file = open(output_fname, 'w')
   sep = ","
@@ -16,6 +21,7 @@ def output_env_coll_list(output_fname, shortlist_features):
   txt_file.write("MinCharge" + sep)
   txt_file.write("MaxCharge" + sep)
   txt_file.write("MonoMass" + sep)
+  txt_file.write("RefinedMonoMass" + sep)
   txt_file.write("RepCharge" + sep)
   txt_file.write("RepMz" + sep)
   txt_file.write("Abundance" + sep)
@@ -28,24 +34,21 @@ def output_env_coll_list(output_fname, shortlist_features):
   txt_file.write("IntensityCorrelation" + sep)
   txt_file.write("Top3Correlation" + sep)
   txt_file.write("EvenOddPeakRatios" + sep)
-  txt_file.write("PercentConsecPeaks" + sep)  
+  txt_file.write("PercentConsecPeaks" + sep)
   txt_file.write("MaximaNumber" + sep)
-  txt_file.write("IntensityCosineSimilarity" + sep)
-  txt_file.write("NumTheoPeaks" + sep)
-  txt_file.write("MzErrorSum" + sep)
-  txt_file.write("MzErrorSumBase" + sep)  
   txt_file.write("Score" + sep)
   txt_file.write("Label" + "\n")
   for fl_idx in range(0, len(shortlist_features)):
     feature = shortlist_features[fl_idx]
     txt_file.write(str(feature.FeatureID) + sep)  #FeatureID
-    txt_file.write(str(feature.MinScan) + sep) #MinScan
-    txt_file.write(str(feature.MaxScan) + sep)   #MaxScan
-    txt_file.write(str(feature.MinCharge) + sep) #MinCharge
-    txt_file.write(str(feature.MaxCharge) + sep) #MaxCharge
-    txt_file.write(str(feature.MonoMass) + sep) #MonoMass
-    txt_file.write(str(feature.RepCharge) + sep) #RepCharge
-    txt_file.write(str(feature.RepMz) + sep) #RepMz
+    txt_file.write(str(feature.MinScan) + sep) #min scan
+    txt_file.write(str(feature.MaxScan) + sep)   #max scan
+    txt_file.write(str(feature.MinCharge) + sep) #min charge
+    txt_file.write(str(feature.MaxCharge) + sep) #max charge
+    txt_file.write(str(feature.MonoMass) + sep) #mono_mass
+    txt_file.write(str(feature.MonoMass) + sep) #refined mono_mass
+    txt_file.write(str(0) + sep) #RepMz
+    txt_file.write(str(0) + sep) #RepCharge
     txt_file.write(str(feature.Abundance) + sep) ## Abundance
     txt_file.write(str(feature.MinElutionTime) + sep) ## MinElutionTime
     txt_file.write(str(feature.MaxElutionTime) + sep) ## MaxElutionTime
@@ -58,45 +61,28 @@ def output_env_coll_list(output_fname, shortlist_features):
     txt_file.write(str(feature.EvenOddPeakRatios) + sep) ## EvenOddPeakRatios
     txt_file.write(str(feature.PercentConsecPeaks) + sep) ## PercentConsecPeaks
     txt_file.write(str(feature.MaximaNumber) + sep) ## MaximaNumber
-    txt_file.write(str(feature.IntensityCosineSimilarity) + sep) ## IntensityCosineSimilarity
-    txt_file.write(str(feature.NumTheoPeaks) + sep) ## NumTheoPeaks
-    txt_file.write(str(feature.MzErrorSum) + sep) ## MzErrorSum
-    txt_file.write(str(feature.MzErrorSumBase) + sep) ## MzErrorSumBase
     txt_file.write(str(feature.Score) + sep) ## Score
     txt_file.write(str(feature.Label) + "\n") ## Label
   txt_file.close()
-  
+
 def sort_features(multicharge_features):
-  multicharge_features.featureList.sort(key=lambda x: x.Score, reverse=True)
+  multicharge_features.sort(key=lambda x: x.Score, reverse=True)
   
 def shortlist_features(multicharge_features, n):
   if n == -1:
-    return multicharge_features.featureList
-  return multicharge_features.featureList[0:n]
+    return multicharge_features
+  return multicharge_features[0:n]
 
-def return_list(multicharge_features_replicate):
-  keys = list(multicharge_features_replicate.keys())
-  keys.sort()
-  featureList_all = []
-  for i in keys:
-    featureList_all.append(deepcopy(multicharge_features_replicate[i]))
-  ## Remove the used keyword
-  for fl in featureList_all:
-    for f in fl:
-      if hasattr(f, "used"):
-        delattr(f, 'used')
-  return featureList_all
-
-def get_common_features_first_replicate(features, tolerance, time_tol):
-  featureList_all = deepcopy(features)
-  
+def get_common_features_first_replicate(features, tolerance, time_tol, tool):
+  featureList_all = deepcopy(features)  
   ## Sort features in replicate 2 onwards by mass for binary search
   featureList = featureList_all[0]
-  featureList.sort(key=lambda x: (x is None, x.FeatureID), reverse=False)
-  # featureList.sort(key=lambda x: (x is None, x.Abundance), reverse=True)
+  if tool == 1:
+    featureList.sort(key=lambda x: (x is None, x.Score), reverse=True)
+  else:
+    featureList.sort(key=lambda x: (x is None, x.Abundance), reverse=True)
   for f_idx in range(1, len(featureList_all)): ## Sort rest of features by mass for binary search
     featureList_all[f_idx].sort(key=lambda x: (x is None, x.MonoMass), reverse=False)
-  
   ## Get common features based on the RT overlap
   common_features = []
   for feature_idx in range(0, len(featureList)):
@@ -112,8 +98,6 @@ def get_common_features_first_replicate(features, tolerance, time_tol):
         temp_features = _getMatchedFeaturesIndicesMultiCharge(featureList_2, feature, tolerance)
         overlapping_features = _get_overlapping_featuresMultiCharge(temp_features, feature, time_tol)
         if len(overlapping_features) > 0:
-          # coverage = [f.coverage for f in overlapping_features]
-          # selected_feature = overlapping_features[coverage.index(max(coverage))]
           apex_diff = [abs(feature.ApexElutionTime - f.ApexElutionTime) for f in overlapping_features]
           selected_feature = overlapping_features[apex_diff.index(min(apex_diff))]
           index = next((i for i, item in enumerate(featureList_2) if item is not None and item.FeatureID == selected_feature.FeatureID), -1)
@@ -123,17 +107,16 @@ def get_common_features_first_replicate(features, tolerance, time_tol):
       common_features.append(tmp_common_features)
   return common_features
 
-def get_common_features_all_replicates(features, tolerance, time_tol):
+def get_common_features_all_replicate(features, tolerance, time_tol):
   featureList_all = deepcopy(features)
-  for f_idx in range(0, len(featureList_all)): ## Sort rest  of features by mass for binary search
+  for f_idx in range(0, len(featureList_all)): ## Sort rest of features by mass for binary search
     featureList_all[f_idx].sort(key=lambda x: (x is None, x.MonoMass), reverse=False)
-  
   ## Get common features based on the RT overlap
   common_features = []
   for featureList_idx in range(0, len(featureList_all)):
     print("processing feature List:", featureList_idx)
     featureList = featureList_all[featureList_idx]
-    featureList.sort(key=lambda x: (x is None, x.FeatureID), reverse=False) #############
+    featureList.sort(key=lambda x: (x is None, x.Score), reverse=True)
     for feature_idx in range(0, len(featureList)):
       if feature_idx%10000 == 0:
         print("processing feature:", feature_idx)
@@ -142,19 +125,17 @@ def get_common_features_all_replicates(features, tolerance, time_tol):
         continue
       else:
         tmp_common_features = []
-        for featureList_idx_2 in range(featureList_idx + 1, len(featureList_all)):
+        for featureList_idx_2 in range(1, len(featureList_all)):
           featureList_2 = featureList_all[featureList_idx_2]
           temp_features = _getMatchedFeaturesIndicesMultiCharge(featureList_2, feature, tolerance)
           overlapping_features = _get_overlapping_featuresMultiCharge(temp_features, feature, time_tol)
           if len(overlapping_features) > 0:
-            coverage = [f.coverage for f in overlapping_features]
-            selected_feature = overlapping_features[coverage.index(max(coverage))]
-            # apex_diff = [abs(feature.ApexElutionTime - f.ApexElutionTime) for f in overlapping_features]
-            # selected_feature = overlapping_features[apex_diff.index(min(apex_diff))]
+            apex_diff = [abs(feature.ApexElutionTime - f.ApexElutionTime) for f in overlapping_features]
+            selected_feature = overlapping_features[apex_diff.index(min(apex_diff))]
             index = next((i for i, item in enumerate(featureList_2) if item is not None and item.FeatureID == selected_feature.FeatureID), -1)
             featureList_2[index].used = True
-            tmp_common_features.append((1, index))
-        tmp_common_features.insert(0, (0, feature_idx))
+            tmp_common_features.append((featureList_idx_2, index))
+        tmp_common_features.insert(0, (featureList_idx, feature_idx))
         common_features.append(tmp_common_features)
   return common_features
 
@@ -176,12 +157,10 @@ def _getMatchedFeaturesIndicesMultiCharge(feature_list, feature, tolerance):
 
 def _get_overlapping_featuresMultiCharge(temp_features, feature, time_tol):
   overlapping = []
-  # print(feature.MinElutionTime, feature.MaxElutionTime)
   for feature_idx in range(0, len(temp_features)):
     f = temp_features[feature_idx]
     start_rt, end_rt = _get_overlap(f, feature, time_tol)
     overlapping_rt_range = end_rt - start_rt
-    # print(f.MinElutionTime, f.MaxElutionTime, '---', start_rt, end_rt, overlapping_rt_range)
     if overlapping_rt_range > 0:
       min_rt = min(f.MinElutionTime - time_tol, feature.MinElutionTime)
       max_rt = max(f.MaxElutionTime + time_tol, feature.MaxElutionTime)
@@ -216,12 +195,12 @@ def _get_overlap(f, feature, time_tol):
  end_rt = min(feature.MaxElutionTime, f.MaxElutionTime + time_tol)
  return (start_rt, end_rt)
 
-def label_features(common, featureList_all):
-  # common = common_features_single
-  featureList_all = features
+def label_features(common, featureList_all, tool):
   for j in range(0, len(featureList_all)):
-    featureList_all[j].sort(key=lambda x: (x is None, x.FeatureID), reverse=False) #############
-    # featureList_all[j].sort(key=lambda x: (x is None, x.Abundance), reverse=True) #############
+    if tool == 1:
+      featureList_all[j].sort(key=lambda x: (x is None, x.Score), reverse=True)
+    else:
+      featureList_all[j].sort(key=lambda x: (x is None, x.Abundance), reverse=True)
     for f_idx in range(j + 1, len(featureList_all)):
       featureList_all[f_idx].sort(key=lambda x: (x is None, x.MonoMass), reverse=False)
     for elem in common:
@@ -230,11 +209,10 @@ def label_features(common, featureList_all):
           featureList_all[i[0]][i[1]].Label = len(elem)
 
 def write_Combined_feature_detailed_10(common_features_all, featureList_all, filename):
-  # featureList_all[0].sort(key=lambda x: x.Score, reverse=True)
-  featureList_all[0].sort(key=lambda x: (x is None, x.FeatureID), reverse=False) #############
+  featureList_all[0].sort(key=lambda x: x.Score, reverse=True)
   for f_idx in range(1, len(featureList_all)):
     featureList_all[f_idx].sort(key=lambda x: (x is None, x.MonoMass), reverse=False)
-  
+ 
   file = open(filename, 'w+')
   for feature_idx in common_features_all:
     if len(feature_idx) == len(featureList_all):
@@ -261,10 +239,6 @@ def write_Combined_feature_detailed_10(common_features_all, featureList_all, fil
       file.write("Monoisotopic_Mass: " + str(list(MonoMass)) + "\n")
       Abundance = [featureList_all[idx[0]][idx[1]].Abundance for idx in feature_idx]
       file.write("Abundance: " + str(list(Abundance)) + "\n")
-      RepMz = [featureList_all[idx[0]][idx[1]].RepMz for idx in feature_idx]
-      file.write("Representative_MZ: " + str(list(RepMz)) + "\n")
-      RepCharge = [featureList_all[idx[0]][idx[1]].RepCharge for idx in feature_idx]
-      file.write("Representative_Charge: " + str(list(RepCharge)) + "\n")
       RepScore = [featureList_all[idx[0]][idx[1]].Score for idx in feature_idx]
       file.write("Score: " + str(list(RepScore)) + "\n")
       file.write("FEATURE_END \n\n")
@@ -274,94 +248,250 @@ def plot_distribution_combined(common_features, Label = False):
   labels = [len(i) for i in common_features]
   labels_counter_1 = sorted(Counter(labels).items(), reverse = True)
   print("Label Counter", labels_counter_1)
-  
   width = 0.5
   plt.figure()
   plt.bar(Counter(labels).keys(), Counter(labels).values(), width)
+  labels_counter = Counter(labels)
+  for i in range(1, len(Counter(labels).keys()) + 1):
+    plt.text(x=i, y=labels_counter[i]+50, s=str(labels_counter[i]), rotation='75', fontdict=dict(color='blue', size=10))
   plt.title("Labels")
   plt.xlabel("Feature found in # of replicates")
+  plt.show()
   plt.savefig("distribution.png", dpi=500)
   plt.close()
+
+###############
+def return_list(multicharge_features_replicate):
+  keys = list(multicharge_features_replicate.keys())
+  keys.sort()
+  featureList_all = []
+  for i in keys:
+    featureList_all.append(deepcopy(multicharge_features_replicate[i]))
+  ## Remove the used keyword
+  for fl in featureList_all:
+    for f in fl:
+      if hasattr(f, "used"):
+        delattr(f, 'used')
+  return featureList_all
+
+def remove_used(featureList):
+  for fl in featureList:
+    for f in fl:
+      if hasattr(f, "used"):
+        delattr(f, 'used')
+        
+def filter_features(promex_features_replicate, multicharge_features_replicate):
+  shortlist_features = []
+  feature_keys = sorted(list(promex_features_replicate.keys()))
+  for i in feature_keys:
+      p = promex_features_replicate[i]
+      shortlist_features.append(multicharge_features_replicate[i][0:len(p)])
+  remove_used(shortlist_features)
+  return shortlist_features
+
+def generate_combine_roc_plots(features, rep_idx = 0, replicate_count_tolerance = 7):
+  featureList = features[rep_idx]
+  featureList.sort(key=lambda x: x.EnvcnnScore, reverse=True)
+  envcnn_scores = []
+  labels = []
+  for feature in featureList:
+    if feature.Label >= replicate_count_tolerance:
+      labels.append(1)
+    elif feature.Label == 1:
+      labels.append(0)
+    else:
+      continue
+    envcnn_scores.append(feature.EnvcnnScore)
+  envcnn_auc = roc_auc_score(labels, envcnn_scores)  
+  envcnn_fpr, envcnn_tpr, envcnn_thresholds = roc_curve(labels, envcnn_scores)
+  print('EnvCNN AUC: %.4f' % envcnn_auc)
+    
+  featureList = features[rep_idx]
+  featureList.sort(key=lambda x: x.Score, reverse=True)
+  scores = []
+  labels = []
+  for feature in featureList:
+    if feature.Label >= replicate_count_tolerance:
+      labels.append(1)
+    elif feature.Label == 1:
+      labels.append(0)
+    else:
+      continue
+    scores.append(feature.Score)
+  auc = roc_auc_score(labels, scores)
+  fpr, tpr, thresholds = roc_curve(labels, scores)
+  print('NN AUC: %.4f' % auc)
   
+  plt.figure()
+  plt.plot(fpr, tpr, marker='.')
+  plt.plot(envcnn_fpr, envcnn_tpr, marker='.')
+  plt.plot([0, 1], [0, 1], linestyle='--')
+  plt.ylabel('True positive rate')
+  plt.xlabel('False positive rate')
+  plt.legend(['ECScore', 'EnvCNN'], loc='lower right')
+  plt.title('ROC Curve')
+  plt.savefig("SW_620_ROC.png", dpi=1000)
+  plt.show()
+  plt.close()
+  
+def generate_rank_plot(features, replicate_count_tolerance = 7):
+  rank_len = max([len(f) for f in features])
+  positive = [0] * rank_len
+  negative = [0] * rank_len
+  for idx in range(0, len(features)):
+    for j in range(0, len(features[idx])):
+      if j >= rank_len:
+        break
+      if features[idx][j].Label >= replicate_count_tolerance:
+        positive[j] = positive[j] + 1
+      if features[idx][j].Label == 1:
+        negative[j] = negative[j] + 1
+  plt.figure()
+  plt.plot(list(range(0, rank_len)), positive)
+  plt.plot(list(range(0, rank_len)), negative)
+  plt.title('Rank Plot')
+  plt.ylabel('Number of PrSMs with label 1')
+  plt.xlabel('Rank Number')
+  plt.legend(['Positive Features', 'Negative Features'], loc='upper right')
+  # plt.savefig("ROC_plot_OC.png", dpi=500)
+  plt.show()
+  plt.close()
+  
+def generate_mean_rank_plot(features, replicate_count_tolerance = 7, bin_size = 50):
+  rank_len = max([len(f) for f in features])
+
+  for idx in range(0, len(features)):
+    features[idx].sort(key=lambda x: x.EnvcnnScore, reverse=True)
+  EnvCNN_positive = [0] * rank_len
+  for idx in range(0, len(features)):
+    for j in range(0, len(features[idx])):
+      if j >= rank_len:
+        break
+      if features[idx][j].Label >= replicate_count_tolerance:
+        EnvCNN_positive[j] = EnvCNN_positive[j] + 1
+
+  for idx in range(0, len(features)):
+    features[idx].sort(key=lambda x: x.Score, reverse=True)          
+  LR_positive = [0] * rank_len
+  for idx in range(0, len(features)):
+    for j in range(0, len(features[idx])):
+      if j >= rank_len:
+        break
+      if features[idx][j].Label >= replicate_count_tolerance:
+        LR_positive[j] = LR_positive[j] + 1
+
+  data_1 = []
+  data_2 = []
+  x = []
+  for i in range(0, int(rank_len/bin_size)+1):
+    start = bin_size*i
+    end = bin_size*(i+1)
+    x.append(end)
+    if end > rank_len:
+      end = rank_len
+    data_1.append(mean(EnvCNN_positive[start:end]))
+    data_2.append(mean(LR_positive[start:end]))
+  
+  plt.figure()
+  plt.plot(x, data_2)
+  plt.plot(x, data_1)
+  plt.title('Rank Plot')
+  plt.ylabel('Found in # of Replicates')
+  plt.xlabel('Rank Number')
+  plt.legend(['ECScore', 'EnvCNN'], loc='upper right')
+  plt.savefig("SW_620_Rank.png", dpi=1000)
+  plt.show()
+  plt.close()
+  
+def compute_rankSum(features, replicate_count_tolerance = 7):
+  for idx in range(0, len(features)):
+    features[idx].sort(key=lambda x: x.EnvcnnScore, reverse=True)
+  ranksum = []
+  for i in range(len(features)):
+    env_ranksum = 0
+    for j in range(len(features[i])):
+      if features[i][j].Label >= replicate_count_tolerance:
+        env_ranksum = env_ranksum + (j + 1)
+    ranksum.append(env_ranksum)
+  print("EnvCNN RankSUM value:", sum(ranksum))
+  
+  for idx in range(0, len(features)):
+    features[idx].sort(key=lambda x: x.Score, reverse=True)
+  ranksum = []
+  for i in range(len(features)):
+    env_ranksum = 0
+    for j in range(len(features[i])):
+      if features[i][j].Label >= replicate_count_tolerance:
+        env_ranksum = env_ranksum + (j + 1)
+    ranksum.append(env_ranksum)
+  print("NN Model RankSUM value:", sum(ranksum))
+  
+def score_features(multicharge_features, model_file):
+  model = tf.keras.models.load_model(model_file)
+  data = []
+  for i in multicharge_features:
+    in_feature = [i.EnvcnnScore, i.rt_range/60.0, i.PercentMatchedPeaks, log(i.Abundance), i.RepCharge, i.Top3Correlation, i.charge_range/30.0, i.EvenOddPeakRatios]
+    data.append(in_feature)
+  test_data = np.array(data)
+  scores = model.predict(test_data)
+  for i in range(0, len(multicharge_features)):
+    multicharge_features[i].Score = scores[i][0] 
+    
 if __name__ == "__main__":
-  print("Label Features!!!!")
+  print("In main function!!")
   parser = argparse.ArgumentParser(description='Generate data matrix for the mzML data.')
-  parser.add_argument("-F", "--feature_dir", default = "", help="Scored feature CSV file (Replicate 1)")
+  parser.add_argument("-f", "--feature_dir", default = r"E:\TopFD_Published_Data\03_Extracted_Features\02_SW620_Colorectal_Cancer\TopFD", help="Directory containing TopFD Features")
+  parser.add_argument("-m", "--model_file", default = r"E:\TopFD_Published_Data\04_Training_Data_ECScore_Model\model\ecscore.h5", help="ECScore model file")
   parser.add_argument("-e", "--tolerance", default = 10E-6, help="Mass tolerance (ppm)", type = float)
   parser.add_argument("-t", "--timeTolerance", default = 1.0, help="Time tolerance (minutes)", type = float)
-  parser.add_argument("-n", "--NumFeatures", default = -1, help="Used to keep top N features", type = int)
-  parser.add_argument("-O", "--outputFile1", default = "Rep1_output_labeled.csv", help="Set the output data file (Replicate 1)")
   args = parser.parse_args()
   
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_14_v1_results\features\OC"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_14_v1_results\features\SW_480"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_14_v1_results\features\SW_620"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_14_v1_results\features\WHIM_2"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_14_v1_results\features\WHIM_16"
-  # data_type = args.feature_dir.split('features\\')[1]
+  data_type = args.feature_dir.split('\\')[-2]
   
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_15_v1\OC"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_15_v1\SW_480"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_15_v1\SW_620"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_15_v1\WHIM_2"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_15_v1\WHIM_16"
+  if data_type == '01_Ovarian_Cancer' or data_type == 'OC':
+    replicate_count_tolerance = 8
+  else:
+    replicate_count_tolerance = 3
+  score_cutoff = 0.5
   
-  
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_19_v3\OC"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_19_v3\SW_480"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_19_v3\SW_620"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_19_v3\WHIM_2"
-  # args.feature_dir = r"C:\Users\Abdul\Documents\topfd_cpp_results\Sep_19_v3\WHIM_16"
-  
-  data_type = args.feature_dir.split('Sep_19_v3\\')[1]
-  
-  feature_files = [f for f in os.listdir(args.feature_dir) if f.endswith(r".feature")]
+  print("\nLoad Features")  
+  feature_files = [f for f in os.listdir(args.feature_dir) if f.endswith(r".feature")]# or f.endswith(r".csv")]
   multicharge_features_replicate = {}
-  
   for file in feature_files:
-    if data_type == 'OC':
+    if data_type == '01_Ovarian_Cancer' or data_type == 'OC':
       file_idx = int(file.split('rep')[1].split('_')[0])
-    if data_type == 'SW_480' or data_type == 'SW_620':
-      file_idx = int(file.split('RPLC_0')[1].split('_')[0])
-    if data_type == 'WHIM_2' or data_type == 'WHIM_16':
-      file_idx = int(file.split('techrep')[1].split('_')[0])
+    else:
+      file_idx = int(file.split('_0')[1].split('_')[0])
     print("Processing File:", file_idx, file)
     multicharge_features = get_features(os.path.join(args.feature_dir, file))
+    score_features(multicharge_features, args.model_file)
+    multicharge_features = [i for i in multicharge_features if i.Score >=score_cutoff]
+    sort_features(multicharge_features)
     multicharge_features_replicate[file_idx] = multicharge_features
   
+  
+  ######## GET AUC
   features = return_list(multicharge_features_replicate)
-  common_features_single = get_common_features_first_replicate(features, args.tolerance, args.timeTolerance)
-  plot_distribution_combined(common_features_single, True)  
-  label_features(common_features_single, features)
-  # write_Combined_feature_detailed_10(common_features_single, features, os.path.join(args.feature_dir, "common_features_detailed.txt"))
+  common_features_r1 = get_common_features_first_replicate(features, args.tolerance, args.timeTolerance, 0)
+  plot_distribution_combined(common_features_r1, True)
+  label_features(common_features_r1, features, 0)
   
-  if data_type == 'OC':
-    r_tol = 8
-  if data_type == 'SW_480' or data_type == 'SW_620':
-    r_tol = 3
-  if data_type == 'WHIM_2' or data_type == 'WHIM_16':
-    r_tol = 5
-    
-  rep1_features = []
-  for f in features[0]:
-    if f.Label == 1:
-      f.Label = 0
-      rep1_features.append(f)
-  for f in features[0]:
-    if f.Label >= r_tol:
-      f.Label = 1
-      rep1_features.append(f)
-    
-  output_env_coll_list(os.path.join(args.feature_dir, "rep_" + str(1) + "_multiCharge_features_labeled_v1.csv"), rep1_features)
+  generate_combine_roc_plots(features, 0, replicate_count_tolerance)
+  generate_mean_rank_plot(features, replicate_count_tolerance, bin_size = 100)
+  compute_rankSum(features, replicate_count_tolerance)
   
-  # # a = [i for i in features[0] if i.Label == 3]
-  # # charge_range = [i.ChargeRange for i in a]
-  # # print(Counter(charge_range))
-  # # MultiChargeFeatureList.print_features(features[0], os.path.join(args.feature_dir, "rep_" + str(1) + "_multiCharge_features_labeled_v1.csv"))
   
-  # # for idx in range(0, len(features)):
-  # #   MultiChargeFeatureList.print_features(features[idx], os.path.join(args.feature_dir, "out_" + str(idx) + ".csv"))
+  # ### Get scorng distribution
+  # positive_features = [f.Score for f in features[0] if f.Label >= replicate_count_tolerance]
+  # negative_features = [f.Score for f in features[0] if f.Label == 1]
+  # plt.Figure()
+  # plt.hist(positive_features, bins=10, range=(0, 1), alpha= 0.6)
+  # plt.hist(negative_features, bins=10, range=(0, 1), alpha= 0.6)
+  # plt.legend(['+ve', '-ve'])
+  # plt.title("Score distributio")
+  # plt.show()
+  # plt.close()
   
-  # # write_Combined_feature_detailed_10(common_features_single, features, "common_features_detailed.txt")
-  # # plot_distribution_combined(common_features, True)
+  # print("Number of +ve features:", len(positive_features))
+  # print("Number of -ve features:", len(negative_features))
   
