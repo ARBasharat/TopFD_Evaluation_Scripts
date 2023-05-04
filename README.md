@@ -1,6 +1,6 @@
 # TopFD_Evaluation_Scripts 
 
-You can downaload the data using: https://www.toppic.org/software/toppic/topfd_submission.html
+You can downaload the data using: https://www.toppic.org/software/toppic/topfd_supplemental.html
 
 
 ## Step 1: Label the proteoform features for training the model.
